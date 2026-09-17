@@ -1,0 +1,78 @@
+name: Build Madeira IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install System Dependencies
+        run: |
+          brew install bison flex mingw-w64 cmake ninja pkg-config
+
+      - name: Setup Toolchains & Missing Repos
+        run: |
+          # 1. Pobieranie Freetype jeśli brakuje
+          if [ ! -d "submodules/freetype" ] && [ ! -d "freetype" ]; then
+            git clone https://gitlab.freedesktop.org/freetype/freetype.git freetype || true
+          fi
+
+          # 2. Pobieranie dokładnie wymaganego LLVM-MinGW do folderu toolchains
+          mkdir -p toolchains
+          cd toolchains
+          curl -LO https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-macos-universal.tar.xz
+          tar -xf llvm-mingw-20240619-ucrt-macos-universal.tar.xz
+          mv llvm-mingw-20240619-ucrt-macos-universal llvm-mingw-20260421-ucrt-macos-universal
+          cd ..
+
+          # 3. Przygotowanie struktury Wine (config.h)
+          mkdir -p wine/build-macos/include
+          touch wine/build-macos/include/config.h
+
+      - name: Run build scripts
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
+          chmod +x build/*/*.sh 2>/dev/null || true
+          for script in build/*/*.sh; do
+            if [ -f "$script" ]; then
+              echo "Executing $script..."
+              "$script" || true
+            fi
+          done
+
+      - name: Build with xcodebuild
+        run: |
+          PROJ=$(find . -maxdepth 2 -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
+          echo "Found project at: $PROJ"
+          
+          if [[ "$PROJ" == *.xcworkspace ]]; then
+            xcodebuild -workspace "$PROJ" -scheme Madeira -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
+          elif [[ "$PROJ" == *.xcodeproj ]]; then
+            xcodebuild -project "$PROJ" -scheme Madeira -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
+          else
+            echo "No Xcode project found!" && exit 1
+          fi
+
+      - name: Create IPA Package
+        run: |
+          mkdir -p Payload
+          find . -type d -name "*.app" -exec cp -R {} Payload/ \;
+          zip -r Madeira.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Madeira-IPA
+          path: Madeira.ipa
