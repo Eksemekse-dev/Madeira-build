@@ -1,7 +1,7 @@
 name: Build Madeira IPA
 
 on:
-  workflow_dispatch: # Pozwala ręcznie uruchomić budowanie przyciskiem "Run workflow"
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,20 +20,32 @@ jobs:
 
       - name: Run build scripts
         run: |
-          chmod +x build/*/*.sh
+          chmod +x build/*/*.sh 2>/dev/null || true
           for script in build/*/*.sh; do
-            echo "Executing $script..."
-            "$script" || true
+            if [ -f "$script" ]; then
+              echo "Executing $script..."
+              "$script" || true
+            fi
           done
 
       - name: Build with xcodebuild
         run: |
-          xcodebuild -scheme Madeira -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
+          # Znajdź plik .xcodeproj lub .xcworkspace w projekcie
+          PROJ=$(find . -maxdepth 2 -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
+          echo "Found project at: $PROJ"
+          
+          if [[ "$PROJ" == *.xcworkspace ]]; then
+            xcodebuild -workspace "$PROJ" -scheme Madeira -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
+          elif [[ "$PROJ" == *.xcodeproj ]]; then
+            xcodebuild -project "$PROJ" -scheme Madeira -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
+          else
+            echo "No Xcode project found!" && exit 1
+          fi
 
       - name: Create IPA Package
         run: |
           mkdir -p Payload
-          mv build/Release-iphoneos/*.app Payload/ 2>/dev/null || mv build/*.app Payload/ 2>/dev/null || true
+          find . -type d -name "*.app" -exec cp -R {} Payload/ \;
           zip -r Madeira.ipa Payload
 
       - name: Upload IPA Artifact
